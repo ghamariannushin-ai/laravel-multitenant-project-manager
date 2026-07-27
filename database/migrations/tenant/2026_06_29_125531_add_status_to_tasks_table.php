@@ -8,14 +8,14 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('tasks', function (Blueprint $table) {
+        Schema::connection('tenant')->table('tasks', function (Blueprint $table) {
             $table->string('status')->default('todo')->after('title');
         });
     }
 
     public function down(): void
     {
-        Schema::table('tasks', function (Blueprint $table) {
+        Schema::connection('tenant')->table('tasks', function (Blueprint $table) {
             $table->dropColumn('status');
         });
     }
