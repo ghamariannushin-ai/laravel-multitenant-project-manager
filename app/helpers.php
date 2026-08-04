@@ -2,7 +2,9 @@
 
 use App\Services\TenantContext;
 
-function tenant()
-{
-    return TenantContext::getTenant();
+if (! function_exists('tenant')) {
+    function tenant()
+    {
+        return TenantContext::getTenant();
+    }
 }

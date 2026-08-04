@@ -5,31 +5,28 @@ use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\ProjectController;
 use App\Http\Controllers\Api\V1\TaskController;
 use App\Http\Controllers\Api\V1\TenantReportController;
+use App\Http\Middleware\IdentifyTenant;
 
 Route::prefix('v1')->group(function () {
-    // مسیرهای عمومی
+    // عمومی
     Route::post('register', [AuthController::class, 'register']);
     Route::post('login', [AuthController::class, 'login']);
 
-    // مسیرهای محافظت‌شده
-    Route::middleware('auth:sanctum')->group(function () {
-        Route::get('me', [AuthController::class, 'me']);
-        Route::post('logout', [AuthController::class, 'logout']);
+    Route::middleware([
+    IdentifyTenant::class,
+    'auth:sanctum',
+])->group(function () {
+    Route::prefix('tenant')->group(function () {
+        Route::post('reports', [TenantReportController::class, 'generate'])
+            ->name('tenant-reports.generate');
 
-        Route::apiResource('projects', ProjectController::class);
-        Route::apiResource('tasks', TaskController::class);
+        Route::get('reports/{report}/status', [
+            TenantReportController::class,
+            'status',
+        ])->name('tenant-reports.status');
 
-        Route::post(
-            '/tenant/reports',
-            [TenantReportController::class, 'generate']
-        )->name('tenant-reports.generate');
-
-        Route::get(
-            '/tenant/reports/{report}/status',
-            [TenantReportController::class, 'status']
-        )->name('tenant-reports.status');
-
-        Route::get('tenant-reports/{report}/download-csv', [TenantReportController::class, 'downloadCsv'])
-        ->name('tenant-reports.download-csv');
-        });
+Route::get('reports/{report}/download-csv', [TenantReportController::class, 'downloadCsv'])
+    ->name('tenant-reports.download-csv');
+    });
+});
 });

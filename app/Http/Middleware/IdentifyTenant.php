@@ -2,30 +2,44 @@
 
 namespace App\Http\Middleware;
 
+use App\Domain\Tenant\Models\Tenant;
 use Closure;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
-use App\Domain\Tenant\Models\Tenant;
+use Symfony\Component\HttpFoundation\Response;
 
 class IdentifyTenant
 {
-    public function handle($request, Closure $next)
+    public function handle(Request $request, Closure $next): Response
     {
         $host = $request->getHost();
 
-        $tenant = Tenant::where('domain', $host)->first();
+        // استفاده مستقیم از DB::connection برای دور زدن مشکلات کانکشن پیش‌فرض Eloquent
+        $tenantData = DB::connection('central')
+            ->table('tenants')
+            ->where('domain', $host)
+            ->first();
 
-        if (! $tenant) {
-            abort(404, 'Tenant not found for host: ' . $host);
+        if (! $tenantData) {
+            abort(404, "Tenant not found for host: {$host}");
         }
 
-        Config::set('database.connections.tenant.database', $tenant->database);
+        // ساخت مجدد نمونه کلاس مدل بر اساس داده‌های دریافت شده
+        $tenant = new Tenant();
+        $tenant->forceFill((array) $tenantData);
+        $tenant->exists = true;
+
+        Config::set(
+            'database.connections.tenant.database',
+            $tenant->database
+        );
 
         DB::purge('tenant');
         DB::reconnect('tenant');
 
-
-        app()->instance('tenant', $tenant);
+        app()->instance('currentTenant', $tenant);
+        app()->instance(Tenant::class, $tenant);
 
         return $next($request);
     }

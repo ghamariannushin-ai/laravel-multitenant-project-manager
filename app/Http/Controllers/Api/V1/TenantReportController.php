@@ -1,87 +1,128 @@
 <?php
 
 namespace App\Http\Controllers\Api\V1;
-
+use App\Domain\Tenant\Models\Tenant;
 use App\Http\Controllers\Controller;
-use App\Domain\Tenant\Models\TenantReport; // مطمئن شوید مسیر مدل درست است
+use App\Domain\Tenant\Jobs\ProcessTenantReport;
+use App\Domain\Tenant\Models\TenantReport;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpFoundation\StreamedResponse;
-use Illuminate\Http\Response;
 
 class TenantReportController extends Controller
 {
-    // ... متدهای قبلی کنترلر شما ...
+    public function generate(): JsonResponse
+    {
+        $tenantId = null;
 
-    /**
-     * دانلود گزارش Tenant مشخص شده به صورت CSV
-     *
-     * @param TenantReport $report
-     * @return StreamedResponse
-     */
-   public function downloadCsv(TenantReport $report): StreamedResponse
-{
-    // ۱. بررسی دقیق وضعیت گزارش برای راهنمایی بهتر در دیباگ
-    if ($report->status === 'failed') {
-        abort(Response::HTTP_BAD_REQUEST, 'این گزارش با خطا مواجه شده و قابل دانلود نیست.');
-    }
+        if (function_exists('tenant')) {
+            $tenantId = tenant('id');
+        }
 
-    if ($report->status !== 'completed' || is_null($report->payload)) {
-        abort(Response::HTTP_BAD_REQUEST, 'گزارش هنوز در حال پردازش است و آماده دانلود نیست.');
-    }
+        if (!$tenantId) {
+            $user = auth()->user();
+            $tenantId = $user ? ($user->tenant_id ?? null) : null;
+        }
 
-    // ۲. تبدیل داده‌های payload به آرایه
-    $data = is_array($report->payload) ? $report->payload : json_decode($report->payload, true);
+        if (!$tenantId) {
+            $host = request()->getHost();
+            $tenant = DB::connection('central')
+                ->table('tenants')
+                ->where('domain', $host)
+                ->first();
 
-    // نام فایل خروجی
-    $fileName = 'tenant_report_' . $report->tenant_id . '_' . now()->format('Y_m_d_His') . '.csv';
+            $tenantId = $tenant ? $tenant->id : null;
+        }
 
-    // ۳. ایجاد پاسخ استریم شده با کلیدهای واقعی دیتابیس شما
-    $response = new StreamedResponse(function () use ($data) {
-        $file = fopen('php://output', 'w');
+        if (!$tenantId) {
+            return response()->json([
+                'error' => 'Tenant ID not found.'
+            ], 400);
+        }
 
-        // هدر BOM برای پشتیبانی اکسل از زبان فارسی
-        fprintf($file, chr(0xEF).chr(0xBB).chr(0xBF));
-
-        // هدر جدول
-        fputcsv($file, [
-            'شاخص (Metric)',
-            'مقدار (Value)',
-            'توضیحات (Description)'
+        $report = TenantReport::create([
+            'tenant_id' => $tenantId,
+            'status' => 'queued',
         ]);
 
-        // نوشتن اطلاعات کلی بر اساس کلیدهای واقعی دیتابیس شما
-        if (isset($data['projects_count'])) {
-            fputcsv($file, ['تعداد کل پروژه‌ها', $data['projects_count'], 'مجموع پروژه‌های تعریف شده در Tenant']);
-        }
+        ProcessTenantReport::dispatch((int) $tenantId, (int) $report->id);
 
-        if (isset($data['tasks_count'])) {
-            fputcsv($file, ['تعداد کل وظایف', $data['tasks_count'], 'مجموع تسک‌های ثبت شده در سیستم']);
-        }
+        return response()->json([
+            'message' => 'Report queued successfully.',
+            'data' => [
+                'id' => $report->id,
+                'status' => $report->status,
+                'status_url' => route('tenant-reports.status', ['report' => $report->id]),
+                'download_url' => route('tenant-reports.download-csv', ['report' => $report->id]),
+            ],
+        ], 202);
+    }
 
-        // اگر فیلد زمان تولید گزارش هم وجود دارد، اضافه شود
-        if (isset($data['generated_at'])) {
-            fputcsv($file, ['زمان تولید گزارش', $data['generated_at'], 'تاریخ و ساعت دقیق تولید داده‌ها']);
-        }
+    public function status(TenantReport $report): JsonResponse
+    {
+        return response()->json([
+            'data' => [
+                'id' => $report->id,
+                'status' => $report->status,
+                'payload' => $report->payload,
+                'error_message' => $report->error_message,
+                'started_at' => $report->started_at,
+                'completed_at' => $report->completed_at,
+                'download_url' => $report->status === 'completed'
+                    ? route('tenant-reports.download-csv', ['report' => $report->id])
+                    : null,
+            ],
+        ]);
+    }
 
-        // اگر اطلاعات تفکیکی تسک‌ها وجود دارد
-        if (isset($data['tasks_by_status']) && is_array($data['tasks_by_status'])) {
-            foreach ($data['tasks_by_status'] as $status => $count) {
-                fputcsv($file, [
-                    "تعداد تسک‌های وضعیت: {$status}",
-                    $count,
-                    'تفکیک وضعیت تسک‌ها'
-                ]);
-            }
-        }
+public function downloadCsv(int $report)
+{
+    $tenant = app(Tenant::class);
 
-        fclose($file);
-    });
+    $tenantReport = TenantReport::on('central')
+        ->whereKey($report)
+        ->where('tenant_id', $tenant->id)
+        ->firstOrFail();
 
-    // تنظیم هدرهای پاسخ HTTP
-    $response->headers->set('Content-Type', 'text/csv; charset=utf-8');
-    $response->headers->set('Content-Disposition', 'attachment; filename="' . $fileName . '"');
-    $response->headers->set('Pragma', 'no-cache');
-    $response->headers->set('Expires', '0');
+    if ($tenantReport->status !== 'completed') {
+        return response()->json([
+            'message' => 'Report is not completed.',
+        ], 400);
+    }
 
-    return $response;
+    $payload = $tenantReport->payload;
+
+    if (! is_array($payload)) {
+        return response()->json([
+            'message' => 'Report payload is invalid.',
+        ], 400);
+    }
+
+    $filename = "tenant-report-{$tenantReport->id}.csv";
+
+    return response()->streamDownload(
+        function () use ($payload): void {
+            $stream = fopen('php://output', 'wb');
+
+            fputcsv($stream, [
+                'projects_count',
+                'tasks_count',
+                'generated_at',
+            ]);
+
+            fputcsv($stream, [
+                $payload['projects_count'] ?? 0,
+                $payload['tasks_count'] ?? 0,
+                $payload['generated_at'] ?? '',
+            ]);
+
+            fclose($stream);
+        },
+        $filename,
+        [
+            'Content-Type' => 'text/csv; charset=UTF-8',
+        ]
+    );
 }
+
 }
