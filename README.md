@@ -15,6 +15,8 @@ This project uses a **database-per-tenant** architecture, meaning each tenant ha
 - **Task Management API:** create and list tasks per tenant
 - **Domain-Oriented Structure:** project models are organized in a clean architecture
 - **Data Isolation:** tenants cannot access each other’s records
+- **Async Tenant Reporting:** generate tenant reports in the background using Laravel queues
+- **Custom Tenant Migration Command:** run tenant database migrations using the custom `php artisan tenant:migrate` command
 
 ---
 
@@ -30,24 +32,54 @@ The application follows a tenant-aware request flow:
 
 ---
 
+## 🛠 Usage
+
+### Tenant Migration
+
+Run tenant migrations for all tenant databases:
+php artisan tenant:migrate
+
+Run tenant migrations for a specific tenant database:
+php artisan tenant:migrate --tenant=alpha_taskino
+
+### Async Tenant Reports
+
+Tenant report generation uses Laravel queues. To process queued report jobs, run:
+php artisan queue:work
+
+The report flow is:
+1. A tenant user requests report generation
+2. The application creates a pending tenant report
+3. A queued job processes the report in the background
+4. The user can check the report status
+5. When completed, the user can download the generated report
+
 ## 🗂 Project Structure
 
 This project uses a domain-oriented structure for models and a standard Laravel structure for HTTP handling.
 
 Example structure:
-```text
 app/
+├── Console/
+│   └── Commands/
+│       └── TenantMigrateCommand.php
 ├── Domain/
 │   ├── Task/
 │   │   └── Models/
 │   │       ├── Project.php
 │   │       └── Task.php
 │   └── Tenant/
+│       ├── Jobs/
+│       │   └── ProcessTenantReport.php
 │       └── Models/
 │           ├── Tenant.php
+│           ├── TenantReport.php
 │           └── PersonalAccessToken.php
 ├── Http/
 │   ├── Controllers/
+│   │   └── Api/
+│   │       └── V1/
+│   │           └── TenantReportController.php
 │   └── Middleware/
 │       └── IdentifyTenant.php
 └── Providers/
